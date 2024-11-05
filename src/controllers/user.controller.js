@@ -19,7 +19,7 @@ const registerUser = asyncHandler(async (req, res) => {
     throw new ApiError(409, "User already exists with this email or user name");
   }
   // check for images, check for avatar
-  const avatarLocalPath = req.files?.avatart[0]?.path;
+  const avatarLocalPath = req.files?.avatar[0]?.path;
   let coverImageLocalPath;
   if (
     req.files &&
@@ -57,7 +57,7 @@ const registerUser = asyncHandler(async (req, res) => {
     throw new ApiError(500, "Something went wrong while registering the user");
   }
   // return response
-  res
+  return res
     .status(201)
     .json(new ApiResponse(200, createdUser, "User registered Successfully"));
 });
