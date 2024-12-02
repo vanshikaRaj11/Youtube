@@ -11,6 +11,200 @@ import { deleteOnCloudinary, uploadOnCloudinary } from "../utils/cloudinary.js";
 const getAllVideos = asyncHandler(async (req, res) => {
   const { page = 1, limit = 10, query, sortBy, sortType, userId } = req.query;
   //TODO: get all videos based on query, sort, pagination
+  const pipeline = [];
+  // Search video by title -> using regex for matching input query
+  if (query) {
+    pipeline.push({
+      $match: {
+        title: {
+          $regex: query,
+          $options: "i",
+        },
+      },
+    });
+  }
+  // Search by userId
+  if (userId) {
+    if (!isValidObjectId(userId)) {
+      throw new ApiError(400, "Enter a valid user id");
+    }
+    pipeline.push({
+      $match: {
+        owner: new mongoose.Types.ObjectId(userId),
+      },
+    });
+  }
+  // Videos searched should be published
+  pipeline.push({
+    $match: {
+      isPublished: true,
+    },
+  });
+
+  // Sorting
+  const sortOrder = sortType.toLowerCase() === "asc" ? 1 : -1;
+  pipeline.push({
+    $sort: sortBy ? { [sortBy]: sortOrder } : { createdAt: -1 },
+  });
+
+  // Add user details for the video owner
+  pipeline.push({
+    $lookup: {
+      from: "users",
+      localField: "owner",
+      foreignField: "_id",
+      as: "ownerDetails",
+      pipeline: [
+        {
+          $lookup: {
+            from: "subscriptions",
+            localField: "_id",
+            foreignField: "channel",
+            as: "subscribers",
+          },
+        },
+        {
+          $addFields: {
+            subscribersCount: { $size: "$subscribers" },
+            isSubscribed: {
+              $cond: {
+                if: { $in: [req.user?._id, "$subscribers.subscriber"] },
+                then: true,
+                else: false,
+              },
+            },
+          },
+        },
+        {
+          $project: {
+            username: 1,
+            avatar: 1,
+            subscribersCount: 1,
+            isSubscribed: 1,
+          },
+        },
+      ],
+    },
+  });
+
+  pipeline.push({
+    $unwind: "$ownerDetails",
+  });
+
+  // Lookup likes and user details
+  pipeline.push({
+    $lookup: {
+      from: "likes",
+      localField: "_id",
+      foreignField: "video",
+      as: "likes",
+      pipeline: [
+        {
+          $lookup: {
+            from: "users",
+            localField: "likedBy",
+            foreignField: "_id",
+            as: "userDetails",
+          },
+        },
+        {
+          $project: {
+            likedBy: 1,
+            userDetails: {
+              username: 1,
+              avatar: 1,
+            },
+          },
+        },
+      ],
+    },
+  });
+
+  // Lookup comments and commenter details
+  pipeline.push({
+    $lookup: {
+      from: "comments",
+      localField: "_id",
+      foreignField: "video",
+      as: "comments",
+      pipeline: [
+        {
+          $lookup: {
+            from: "users",
+            localField: "owner",
+            foreignField: "_id",
+            as: "commenterDetails",
+          },
+        },
+        {
+          $lookup: {
+            from: "likes",
+            localField: "_id",
+            foreignField: "comment",
+            as: "commentLikes",
+            pipeline: [
+              {
+                $lookup: {
+                  from: "users",
+                  localField: "likedBy",
+                  foreignField: "_id",
+                  as: "userDetails",
+                },
+              },
+              {
+                $project: {
+                  likedBy: 1,
+                  userDetails: {
+                    username: 1,
+                    avatar: 1,
+                  },
+                },
+              },
+            ],
+          },
+        },
+        {
+          $project: {
+            content: 1,
+            createdAt: 1,
+            commenterDetails: {
+              username: 1,
+              avatar: 1,
+            },
+            commentLikes: 1,
+          },
+        },
+      ],
+    },
+  });
+
+  // Add derived fields for likes and comments count
+  pipeline.push({
+    $addFields: {
+      likesCount: { $size: "$likes" },
+      commentCount: { $size: "$comments" },
+      isLiked: {
+        $cond: {
+          if: { $in: [req.user?._id, "$likes.likedBy"] },
+          then: true,
+          else: false,
+        },
+      },
+    },
+  });
+
+  // Create an aggregation instance
+  const videoAggregate = Video.aggregate(pipeline);
+  // Add pagination options
+  const options = {
+    page: parseInt(page, 10),
+    limit: parseInt(limit, 10),
+  };
+  // Paginate results
+  const videos = await Video.aggregatePaginate(videoAggregate, options);
+  return res
+    .status(200)
+    .json(new ApiResponse(200, videos, "Videos fetched successfully"));
 });
 
 const publishAVideo = asyncHandler(async (req, res) => {
@@ -183,8 +377,65 @@ const getVideoById = asyncHandler(async (req, res) => {
 });
 
 const updateVideo = asyncHandler(async (req, res) => {
-  const { videoId } = req.params;
   //TODO: update video details like title, description, thumbnail
+  const { title, description } = req.body;
+  const { videoId } = req.params;
+
+  if (!isValidObjectId(videoId)) {
+    throw new ApiError(400, "Invalid Id");
+  }
+
+  if ([title, description].some((field) => field.trim() === "")) {
+    throw new ApiError(400, "Title & description  are required");
+  }
+  const video = await Video.findById(videoId);
+  if (!video) {
+    throw new ApiError(400, "Video not found.!!");
+  }
+
+  if (video?.owner.toString() !== req.user?._id.toString()) {
+    throw new ApiError(
+      400,
+      "You can't edit this video as you are not authorized user"
+    );
+  }
+
+  const existingThumbnail = video.thumbnail.public_id;
+
+  const newThumbnailPath = req.file?.path;
+
+  if (!newThumbnailPath) {
+    throw new ApiError(400, "Thumbnail is required");
+  }
+  const newThumbnail = await uploadOnCloudinary(newThumbnailPath);
+
+  if (!newThumbnail) {
+    throw new ApiError(400, "thumbnail not found");
+  }
+
+  const updatedVideo = await Video.findByIdAndUpdate(
+    videoId,
+    {
+      $set: {
+        title,
+        description,
+        thumbnail: {
+          public_id: newThumbnail.public_id,
+          url: newThumbnail.url,
+        },
+      },
+    },
+    { new: true }
+  );
+
+  if (!updatedVideo) {
+    throw new ApiError(500, "Failed to update video please try again");
+  }
+  await deleteOnCloudinary(existingThumbnail);
+
+  return res
+    .status(200)
+    .json(new ApiResponse(200, updatedVideo, "Video updated successfully"));
 });
 
 const deleteVideo = asyncHandler(async (req, res) => {
