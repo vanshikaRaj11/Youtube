@@ -7,6 +7,67 @@ import mongoose, { isValidObjectId } from "mongoose";
 
 const getVideoComments = asyncHandler(async (req, res) => {
   //TODO: get all comments for a video
+  const { videoId } = req.params;
+  const { page = 1, limit = 10 } = req.query;
+
+  const commentsAggregate = Comment.aggregate([
+    {
+      $match: { video: new mongoose.Types.ObjectId(videoId) },
+    },
+    {
+      $lookup: {
+        // Fetch commenter details
+        from: "users",
+        localField: "owner",
+        foreignField: "_id",
+        as: "commenter",
+      },
+    },
+    {
+      $lookup: {
+        // Fetch likes associated with comments
+        from: "likes",
+        localField: "_id",
+        foreignField: "comment",
+        as: "likes",
+      },
+    },
+    {
+      $addFields: {
+        likesCount: { $size: "$likes" },
+        owner: { $first: "$commenter" },
+        isLiked: {
+          $cond: {
+            if: { $in: [req.user?._id, "$likes.likedBy"] },
+            then: true,
+            else: false,
+          },
+        },
+      },
+    },
+    {
+      $sort: { createdAt: -1 },
+    },
+    {
+      $project: {
+        content: 1,
+        createdAt: 1,
+        commenter: { username: 1, avatar: 1 },
+        likeCount: { $size: "$likes" },
+        isLiked: 1,
+      },
+    },
+  ]);
+
+  const options = {
+    page: parseInt(page, 10),
+    limit: parseInt(limit, 10),
+  };
+
+  const comment = await Comment.aggregatePaginate(commentsAggregate, options);
+  return res
+    .status(200)
+    .json(new ApiResponse(200, comment, "Video Comments fetched successfully"));
 });
 
 const addComment = asyncHandler(async (req, res) => {
@@ -70,6 +131,18 @@ const updateComment = asyncHandler(async (req, res) => {
 const deleteComment = asyncHandler(async (req, res) => {
   // TODO: delete a comment
   const { commentId } = req.params;
+   if (!commentId) {
+     throw new ApiError(400, "Comment id not found in params.!!");
+   }
+   const comment = await Comment.findById(commentId);
+   if (!comment) {
+     throw new ApiError(400, "Comment not found.");
+   }
+   await Comment.findByIdAndDelete(commentId);
+
+   return res
+     .status(200)
+     .json(new ApiResponse(200, {}, "Comment Delete Succesfully"));
 });
 
 export { getVideoComments, addComment, updateComment, deleteComment };

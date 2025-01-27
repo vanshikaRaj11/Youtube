@@ -101,9 +101,9 @@ npm run dev
 | Endpoint                                | Method | Description                           |
 |-----------------------------------------|--------|---------------------------------------|
 | `/comments/:videoId`                   | POST   | Add a comment to a video              |
-| `/comments/c/:commentId`               | DELETE | Delete a comment                      |
-| `/comments/c/:commentId`               | PATCH  | Update a comment                      |
-| `/comments/c/getVideoComments/:videoId`   | GET  | Get video comments                      |
+| `/comments/:commentId`               | DELETE | Delete a comment                      |
+| `/comments/:commentId`               | PATCH  | Update a comment                      |
+| `/comments/getVideoComments/:videoId`   | GET  | Get video comments                      |
 
 ### Playlists
 
