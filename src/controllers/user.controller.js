@@ -25,20 +25,19 @@ const generateAccessAndRefreshTokens = async (userId) => {
 };
 
 const registerUser = asyncHandler(async (req, res) => {
-  // get user details from frontend
   const { username, fullName, email, password } = req.body;
-  // validation
+
   if (
     [fullName, email, username, password].some((field) => field?.trim() === "")
   ) {
     throw new ApiError(400, "All fields are required");
   }
-  // check if user already exists
+
   const existingUser = await User.findOne({ $or: [{ username }, { email }] });
   if (existingUser) {
     throw new ApiError(409, "User already exists with this email or user name");
   }
-  // check for images, check for avatar
+
   const avatarLocalPath = req.files?.avatar[0]?.path;
   let coverImageLocalPath;
   if (
@@ -52,14 +51,14 @@ const registerUser = asyncHandler(async (req, res) => {
   if (!avatarLocalPath) {
     throw new ApiError(400, "Avatar file is required");
   }
-  // upload them to cloudinary, avatar
+
   const avatar = await uploadOnCloudinary(avatarLocalPath);
   const coverImage = await uploadOnCloudinary(coverImageLocalPath);
 
   if (!avatar) {
     throw new ApiError(400, "Avatar file is required");
   }
-  // create user object - create entry in db
+
   const user = await User.create({
     fullName,
     avatar: avatar.url,
@@ -68,15 +67,15 @@ const registerUser = asyncHandler(async (req, res) => {
     password,
     username: username.toLowerCase(),
   });
-  // remove password & refresh token field from response
+
   const createdUser = await User.findById(user._id).select(
     "-password -refreshToken"
   );
-  // check for user creation
+
   if (!createdUser) {
     throw new ApiError(500, "Something went wrong while registering the user");
   }
-  // return response
+
   return res
     .status(201)
     .json(new ApiResponse(200, createdUser, "User registered Successfully"));
